@@ -10,3 +10,13 @@ Requirements
  https://github.com/jianweiguo/SpecularityNet-PSD (PSD)
  
  https://github.com/fu123456/SHIQ (SHIQ)
+
+ 1:Highlight Feature Extraction(1-SHSNet) and Highlight Elimination
+---
+Training segmentation model
+train.py  
+Testing segmentation model
+test.py
+Eliminate highlights
+
+
