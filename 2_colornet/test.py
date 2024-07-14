@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import torch
 from convnext_net import ConvNeXtV2
-
+from colorization_pipline import color
 model_path = r''
 # 定义模型
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -38,7 +38,7 @@ with torch.no_grad():
     mask_path=r''
     img1 = transform(image_path)
     mask=transform(mask_path)
-    y = model(img1, mask)
+    y = model(color(img1), mask)
 
     final_result_tensor = y.squeeze(0)
     final_result_np = final_result_tensor.detach().numpy()
