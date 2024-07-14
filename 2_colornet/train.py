@@ -7,7 +7,7 @@ import torch.nn as nn
 from model import FusionNetWithBoundary
 import cv2
 import numpy as np
-
+from colorization_pipline import color
 
 def transform(path):
     image1 = cv2.imread(path)
