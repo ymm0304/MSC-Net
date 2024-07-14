@@ -58,7 +58,7 @@ image_dir = r''
 gt_dir = r''
 mask_dir = r''
 
-dataset = MyDataset(image_dir, mask_dir, gt_dir,transform=transform)
+dataset = MyDataset(color(image_dir), mask_dir, gt_dir,transform=transform)
 dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
 import torch
 
