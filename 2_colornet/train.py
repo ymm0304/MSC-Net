@@ -1,139 +1,139 @@
-from colornet import *
-import matplotlib.pyplot as plt
-from colorizers import *
-import torch.nn as nn
-
-
-class SIGGRAPHGeneratorModified(SIGGRAPHGenerator1):
-    def __init__(self, norm_layer=nn.BatchNorm2d, classes=529):
-        super(SIGGRAPHGeneratorModified, self).__init__(norm_layer, classes)
-        # 由于输入现在是4通道的（包括L通道和高光mask），我们需要修改第一个卷积层以接受4通道输入
-        self.model1[0] = nn.Conv2d(4, 64, kernel_size=3, stride=1, padding=1, bias=True)
-
-    def forward(self, input_A, input_B):
-        # 由于在train函数中已经处理了输入，这里不需要额外的输入处理
-        return super(SIGGRAPHGeneratorModified, self).forward(input_A, input_B)
-
-
-def resize_img(img, HW, resample):
-    # 检查img是否为Tensor
-    if isinstance(img, torch.Tensor):
-        # 确保Tensor在CPU上
-        img = img.cpu()
-        # 转换为NumPy数组
-        img = img.numpy()
-        # 转换为HWC格式，如果需要
-        if img.ndim == 3 and img.shape[0] in {1, 3}:
-            img = img.transpose(1, 2, 0)
-        if img.shape[2] == 1:
-            # 如果图像是单通道的，转换为灰度图
-            img = img.squeeze(-1)
-    # 如果img是float类型的NumPy数组，先转换为uint8（假设图像数据范围是[0, 1]）
-    if img.dtype == np.float32 or img.dtype == np.float64:
-        img = (img * 255).astype(np.uint8)
-
-    # 使用PIL进行图像尺寸调整
-    img_pil = Image.fromarray(img)
-    img_resized = img_pil.resize((HW[1], HW[0]), resample=resample)
-    # 可以选择是否转换回Tensor
-    return np.asarray(img_resized)
-
-
-from torchvision.io import read_image
-from torchvision.transforms.functional import resize, to_tensor
-from skimage import color
-import numpy as np
-import os
-import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from PIL import Image
+import os
+import torch.optim as optim
+import torch.nn as nn
+from model import FusionNetWithBoundary
+import cv2
+import numpy as np
 
 
-class ColorizationDataset(Dataset):
-    def __init__(self, images_dir, masks_dir, transform=None):
-        self.images_dir = images_dir
-        self.masks_dir = masks_dir
-        self.transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Resize((256, 256)),  # 将图像缩放到统一尺寸
-        ])
-        self.images = os.listdir(images_dir)
+def transform(path):
+    image1 = cv2.imread(path)
+    image1 = (image1 / 255.0).astype(np.float32)
+    image1 = cv2.resize(image1, (256, 256))
+    image1 = cv2.cvtColor(image1, cv2.COLOR_BGR2RGB)
+    image1 = torch.from_numpy(image1.transpose((2, 0, 1))).float()
+    # image1 = image1.unsqueeze(0)
+    return image1
+
+
+class MyDataset(Dataset):
+    def __init__(self, image_dir, mask_dir,target, transform=None):
+        self.image_dir = image_dir
+        self.mask_dir = mask_dir
+        self.target_dir = target
+        self.transform = transform
+
+        self.image_files = os.listdir(image_dir)
+        self.mask_files = os.listdir(mask_dir)
+        self.target_files = os.listdir(target)
 
     def __len__(self):
-        return len(self.images)
+        return len(self.image_files)
 
     def __getitem__(self, idx):
-        img_name = self.images[idx]
-        img_path = os.path.join(self.images_dir, img_name)
-        mask_path = os.path.join(self.masks_dir, img_name)  # 假设mask与图像文件名相同
-        HW = (256, 256)
-        resample = 3
-        mask1 = load_gray_img(mask_path)
-        mask_rs = resize_img(mask1, HW=HW, resample=resample)
-        mask = self.transform(mask_rs)
+        # print(idx)
+        image_name = self.image_files[idx]
+        mask_name = self.mask_files[idx]
+        target_name = self.target_files[idx]
 
-        img_rgb_orig = load_img(img_path)
-        img_rgb_rs = resize_img(img_rgb_orig, HW=HW, resample=resample)
+        image_path = os.path.join(self.image_dir, image_name)
+        mask_path = os.path.join(self.mask_dir, mask_name)
 
-        img_lab_orig = color.rgb2lab(img_rgb_orig)
-        img_lab_rs = color.rgb2lab(img_rgb_rs)
-
-        img_l_orig = img_lab_orig[:, :, 0]
-        img_l_rs = img_lab_rs[:, :, 0]
-
-        # 仅保留a和b通道
-        img_ab = img_lab_rs[:, :, 1:3]
-        tens_orig_l = torch.Tensor(img_l_orig)[None, :, :]
-        tens_rs_l = torch.Tensor(img_l_rs)[None, :, :]
-        tens_rs_ab = torch.Tensor(img_ab)[:, :]
-        tens_rs_ab = tens_rs_ab.permute(2, 0, 1)
-        return tens_rs_l, tens_rs_ab, mask  # 归一化mask
+        target_path = os.path.join(self.target_dir, target_name)
+        image_1 = cv2.imread(image_path)
+        mask = Image.open(mask_path)
+        image_2 = cv2.imread(mask_path)
+        image = transform(image_path)
+        target = transform(target_path)
+        mask= transform(mask)
+        return image, target,mask
 
 
-device = torch.device('cuda:0')
+# 定义数据集和数据加载器
 
+image_dir = r''
+gt_dir = r''
+mask_dir = r''
 
-def train(model, dataloader, criterion, optimizer, num_epochs=100):
-    for epoch in range(num_epochs):
-        for i, (input_l, target_ab, high_light_mask) in enumerate(dataloader):
-            optimizer.zero_grad()
-            target_ab = target_ab.to(device)
-            input_l = input_l.repeat(1, 2, 1, 1)
-            high_light_mask = high_light_mask.repeat(1, 2, 1, 1)
-            print("mask:", input_l.size(), high_light_mask.size())
-            input_l = input_l.to(device)
-            high_light_mask = high_light_mask.to(device)
-            with torch.no_grad():  # 添加这行代码
-                # output_ab = model(input_l, high_light_mask)
-                output_ab = model(input_l)
-            output_ab = output_ab.to(device)
-
-            print("111:", output_ab.size(), target_ab.size())
-            loss = criterion(output_ab, target_ab)
-            loss.backward()
-            optimizer.step()
-            print(f'Epoch [{epoch + 1}/{num_epochs}], Step [{i}], Loss: {loss.item()}')
-            # 检查是否是每十个epoch的结尾，并保存模型状态字典
-        if (epoch + 1) % 10 == 0:
-            # 使用epoch编号来命名保存的文件，以便区分
-            filename = f'Epoch{epoch + 1}.pth'
-            torch.save(model.state_dict(), filename)
-            print(f'Model state dict saved to {filename}')
-
-            # 额外保存一次模型状态字典在训练结束后
-    torch.save(model.state_dict(), 'FinalEpoch.pth')
-    print('Final model state dict saved to FinalEpoch.pth')
-
-
-dataset = ColorizationDataset(images_dir='',
-                                  masks_dir='')
+dataset = MyDataset(image_dir, mask_dir, gt_dir,transform=transform)
 dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
-model = SIGGRAPHGeneratorModified()
-model.to(device)
-    # 初始化模型、损失函数和优化器
-import torch.nn as nn
-criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+import torch
+
+# 定义模型
+model = FusionNetWithBoundary().cuda()
+
+torch.cuda.empty_cache()
 
 
-train(model, dataloader, criterion, optimizer)
+def save_model(model, epoch):
+    # 这里保存模型的逻辑，例如使用torch.save
+    torch.save({
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        # 还可以保存优化器状态等
+    }, f'model_checkpoint_{epoch}.pth')
+
+
+criterion_image = nn.MSELoss()
+
+criterion = nn.L1Loss()  # 图像重建损失
+optimizer = optim.Adam(model.parameters(), lr=0.001)  # 定义优化器
+weight_decay_factor = 0.001
+num_epochs = 100  # 假设您想要运行100个epoch
+best_loss = float('inf')  # 初始化一个很大的值，用于跟踪最佳损失
+for epoch in range(num_epochs):
+    running_loss = 0.0
+    for batch_idx, (image, target, mask) in enumerate(dataloader):
+        optimizer.zero_grad()
+        print("image.shape",image.shape)
+        # print(image.size(),boundary.size(),target.size())
+        image = image.cuda()
+        target = target.cuda()
+        # print(image.size(), boundary.size())
+        output = model(image,maks)
+        # print(output.size(), target.size())
+        # 计算图像重建损失
+        reconstruction_loss = criterion_image(output, target) + criterion(output, target)
+
+        # 总体损失为图像重建损失加上边界损失
+        # loss = reconstruction_loss + boundary_loss
+        l2_reg = 0.0
+        for param in model.parameters():
+            l2_reg += torch.norm(param) ** 2
+        l2_reg *= weight_decay_factor
+
+        # 总体损失为图像重建损失加上L2正则化惩罚项
+        loss = reconstruction_loss + l2_reg
+        # 反向传播和优化
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item()
+        # running_loss += loss.item()
+
+        # 计算每个epoch的平均损失
+        print(
+            f'Epoch [{epoch + 1}/{num_epochs}], Step [{batch_idx + 1}/{len(dataloader)}], Loss: {loss.item()}')
+
+    avg_loss = running_loss / len(dataloader)
+
+    # 打印每个epoch的结果
+    print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}')
+
+    # 如果当前epoch的损失是最低的，保存模型
+    # if avg_loss < best_loss:
+    #     best_loss = avg_loss
+    #     save_model(model, epoch)
+
+    # 每50个epoch保存一次模型
+    if (epoch + 1) % 20 == 0:
+        save_model(model, epoch)
+
+    # 训练结束后，保存最终模型（可选）
+save_model(model, num_epochs - 1)
+#
+# for name, layer in model.named_children():
+
