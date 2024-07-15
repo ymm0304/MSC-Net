@@ -78,7 +78,8 @@ def save_model(model, epoch):
 
 
 criterion_image = nn.MSELoss()
-
+loss2=ColorfulnessLoss()+PerceptualLoss()
+loss3=
 criterion = nn.L1Loss()  # 图像重建损失
 optimizer = optim.Adam(model.parameters(), lr=0.001)  # 定义优化器
 weight_decay_factor = 0.001
