@@ -1,1 +1,0 @@
-Put the trained weight file into this folder
